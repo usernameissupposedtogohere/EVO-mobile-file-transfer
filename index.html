@@ -1,0 +1,1082 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d0f12">
+<title>TI-84 Evo File Bridge — WebUSB</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0d0f12;color:#eef2f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:900px;margin:auto;padding:18px}
+h1{font-size:30px;line-height:1.05;margin:0 0 8px}
+h2{font-size:20px;margin:0 0 14px}
+p{line-height:1.45}
+.card{background:#1a2026;border:1px solid #303941;border-radius:15px;padding:16px;margin:14px 0}
+.eyebrow{font-size:12px;letter-spacing:.12em;color:#8fa0ad;margin-bottom:8px}
+header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+header p{color:#aeb8c1;margin:0}
+.pill{border:1px solid #42505a;border-radius:999px;padding:6px 10px;font-size:12px;white-space:nowrap}
+.status{display:flex;gap:11px;align-items:flex-start;margin-bottom:14px}
+.led{width:12px;height:12px;border-radius:50%;background:#68737c;margin-top:5px;flex:none}
+.led.on{background:#75e39b}
+.status b{display:block;font-size:18px}
+.status small{display:block;color:#aeb8c1;margin-top:3px}
+button,input,select{font:inherit}
+button{padding:12px 15px;border-radius:10px;border:1px solid #65717c;background:#26313a;color:#fff;margin:4px 5px 4px 0}
+button.primary{background:#334552}
+button.secondary{background:#20282e}
+button:disabled{opacity:.42}
+input[type=file]{width:100%;margin:4px 0 10px}
+select{padding:10px;border-radius:9px;border:1px solid #4b5861;background:#161c20;color:#fff;margin:4px 8px 4px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:14px}
+.grid span{color:#9da8b0}
+.grid b{font-weight:600}.stage-ok{color:#75e39b}.stage-warn{color:#ffd479}.stage-bad{color:#ff8f8f}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #303941}
+.row:last-child{border-bottom:0}
+.row small{display:block;color:#9da8b0;margin-top:2px}
+.row .name{min-width:0;overflow-wrap:anywhere}
+.row button{padding:8px 12px;flex:none}
+.empty{color:#9da8b0;padding:8px 0}
+.picked{color:#aeb8c1;font-size:13px;overflow-wrap:anywhere;margin:5px 0 8px}
+.ok{color:#75e39b}.warn{color:#ffd479}.bad{color:#ff8f8f}.muted{color:#9da8b0}
+pre{white-space:pre-wrap;word-break:break-word;background:#090b0d;border-radius:10px;padding:12px;max-height:360px;overflow:auto;font-size:12px}
+footer{display:flex;justify-content:space-between;color:#75818a;font-size:12px;padding:8px 2px 22px}
+.hidden{display:none}
+@media(max-width:560px){header{display:block}.pill{display:inline-block;margin-top:10px}.grid{grid-template-columns:1fr}.row{align-items:flex-start}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div>
+    <div class="eyebrow">WEBUSB • TI-84 EVO</div>
+    <h1>Evo File Bridge</h1><div class="muted" style="font-size:12px;margin-top:4px">WebUSB file manager</div>
+    <p>Transfer files directly between the TI-84 Evo and your Android phone.</p>
+  </div>
+  <span id="support" class="pill">Checking…</span>
+</header>
+
+<section class="card">
+  <div class="status">
+    <i id="led" class="led"></i>
+    <div><b id="state">Disconnected</b><small id="detail">Connect the powered-on Evo with a USB-C data cable.</small></div>
+  </div>
+  <button id="connect" class="primary">Connect &amp; Load Files</button>
+  <button id="disconnect" class="secondary" disabled>Disconnect</button>
+  <button id="reset" class="secondary" disabled>Reset</button>
+</section>
+
+<section class="card">
+  <h2>Connection stages</h2>
+  <div id="stages" class="grid">
+    <span>1. USB chooser</span><b id="s1">Not started</b>
+    <span>2. device.open()</span><b id="s2">Not started</b>
+    <span>3. Configuration</span><b id="s3">Not started</b>
+    <span>4. IF0 claim</span><b id="s4">Not started</b>
+    <span>5. CDC setup</span><b id="s5">Not started</b>
+    <span>6. IF1 claim</span><b id="s6">Not started</b>
+    <span>7. Kermit S-INIT</span><b id="s7">Not started</b>
+    <span>8. Waiting for Evo</span><b id="s8">Not started</b>
+    <span>9. Kermit response</span><b id="s9">Not started</b>
+  </div>
+  <p id="wire" class="muted">Kermit: automatic.</p>
+  <div id="txResult" class="small muted">Connect to load the calculator files.</div>
+  <div id="lastExchange" class="small" style="margin-top:8px;overflow-wrap:anywhere">Last exchange: none.</div>
+  <div class="small muted" style="margin-top:8px">Kermit setup and handshake run automatically. WebUSB bulk-IN is never used as a non-blocking input drain.</div>
+</section>
+
+<details class="card">
+  <summary style="cursor:pointer;font-weight:700">Advanced diagnostics</summary>
+  <div style="padding-top:12px">
+    <button id="probe" class="secondary" disabled>Run full Kermit probe</button>
+    <button id="handshake" class="hidden" disabled>Automatic handshake</button>
+    <button id="tx" class="hidden" disabled>Directory transaction</button>
+    <div id="probeResult" class="small muted">Not run.</div>
+    <div id="probeTable" class="small" style="margin-top:8px">Ready.</div>
+  </div>
+</details>
+
+<section id="device" class="card hidden">
+  <h2>Device</h2>
+  <div class="grid">
+    <span>USB ID</span><b id="usb">0451:E018</b>
+    <span>Interface</span><b id="iface">1 / CDC data</b>
+    <span>Endpoints</span><b id="eps">OUT 1 / IN 2</b>
+    <span>Transport</span><b id="transport">WebUSB</b>
+  </div>
+  <div style="margin-top:12px">
+    <button id="refresh" class="primary" disabled>Refresh</button>
+    <button id="info" class="secondary" disabled>Info</button>
+    <button id="cancel" class="secondary" disabled>Cancel</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Files on calculator</h2>
+  <div id="files"><div class="empty">Connect the calculator, then refresh.</div></div>
+</section>
+
+<section class="card">
+  <h2>Send to calculator</h2>
+  <input id="picker" type="file">
+  <div id="picked" class="picked"></div>
+  <select id="memory">
+    <option value="0">RAM</option>
+    <option value="1">Archive</option>
+  </select>
+  <button id="send" class="primary" disabled>Upload to calculator</button>
+  <p class="small muted">Upload an Evo file you downloaded here, or a <b>.py</b> file. Legacy CE <b>.8xp</b> files are not converted.</p>
+</section>
+
+<section class="card">
+  <h2>Connection log</h2>
+  <pre id="log">Ready.</pre>
+</section>
+
+<footer><span>0451:E018</span><span>WebUSB • HTTPS required</span></footer>
+</main>
+
+<script>
+let kermitReady=false;
+"use strict";
+
+const VID=0x0451, PID=0xE018;
+const CONTROL_IF=0, DATA_IF=1, VENDOR_IF=2;
+const CDC_OUT=1, CDC_IN=2, VENDOR_OUT=5, VENDOR_IN=6;
+const TIMEOUT=4500;
+let device=null, transport=null, claimed=new Set();
+let rxBuf=new Uint8Array(0), seq=0, session=null, selected=null, files=[];
+let transactionRunning=false, cancelRequested=false;
+
+const $=id=>document.getElementById(id);
+const enc=new TextEncoder(), dec=new TextDecoder();
+const ascii=s=>enc.encode(s);
+const text=b=>dec.decode(b);
+const cat=(a,b)=>{const x=new Uint8Array(a.length+b.length);x.set(a);x.set(b,a.length);return x};
+const eq=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
+const hex=(v,n=4)=>Number(v).toString(16).toUpperCase().padStart(n,"0");
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function log(s){$("log").textContent+=`\n[${new Date().toLocaleTimeString()}] ${s}`;$("log").scrollTop=$("log").scrollHeight}
+function status(a,b,on=false,cls=""){ $("state").textContent=a; $("detail").textContent=b; $("led").className="led"+(on?" on":""); $("detail").className=cls; }
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+function tochar(x){return x+0x20}
+function unchar(x){return x-0x20}
+function ctl(x){return x^0x40}
+function sum(d){let s=0;for(const b of d)s=(s+b)&65535;return s}
+function checksum(d){let s=0;for(const b of d)s=(s+b)&65535;return tochar((s+((s>>6)&3))&63)}
+function crc16(d){let c=0;for(const b of d){let q=(c^b)&15;c=(c>>4)^(q*0x1081);q=(c^(b>>4))&15;c=(c>>4)^(q*0x1081)}return c&65535}
+function check3(d){const c=crc16(d);return new Uint8Array([tochar((c>>12)&15),tochar((c>>6)&63),tochar(c&63)])}
+function blockCheck(d,t=1){if(t===1)return new Uint8Array([checksum(d)]);if(t===2)return new Uint8Array([tochar(sum(d)>>6),tochar(sum(d)&63)]);return check3(d)}
+function kpacket(n,type,data=new Uint8Array(),s=session?.check||1){
+  const t=typeof type==="string"?type.charCodeAt(0):type,q=n%64,len=data.length+2+s;
+  if(len<=94){
+    const body=cat(new Uint8Array([tochar(len),tochar(q),t]),data);
+    return cat(new Uint8Array([1]),cat(body,cat(blockCheck(body,s),new Uint8Array([13]))));
+  }
+  const dl=data.length+s,hdr=new Uint8Array([tochar(0),tochar(q),t,tochar(Math.floor(dl/95)),tochar(dl%95)]);
+  const body=cat(cat(hdr,blockCheck(hdr,1)),data);
+  return cat(new Uint8Array([1]),cat(body,cat(blockCheck(body,s),new Uint8Array([13]))));
+}
+function parsePacket(raw,s=session?.check||1){
+  if(raw.length<4||raw[0]!==1||raw[raw.length-1]!==13)throw Error("Bad Kermit packet");
+  const body=raw.slice(1,-1),ext=body[0]===tochar(0);
+  let data,checked,check;
+  if(ext){
+    if(body.length<6+s)throw Error("Short extended Kermit packet");
+    if(body[5]!==checksum(body.slice(0,5)))throw Error("Bad extended header checksum");
+    checked=body.slice(0,-s);check=body.slice(-s);data=body.slice(6,-s);
+  }else{
+    checked=body.slice(0,-s);check=body.slice(-s);data=body.slice(3,-s);
+  }
+  if(!eq(check,blockCheck(checked,s)))throw Error("Bad Kermit checksum");
+  return {seq:unchar(body[1]),type:String.fromCharCode(body[2]),data};
+}
+function encodeK(data){
+  const out=[];
+  for(let i=0;i<data.length;){
+    let run=1;while(i+run<data.length&&data[i+run]===data[i]&&run<94)run++;
+    const b=data[i],encb=(b&127)<32||((b&127)===127)?[0x23,ctl(b)]:b===0x23?[0x23,0x23]:b===0x7e?[0x23,0x7e]:[b];
+    if(run>=3)out.push(0x7e,tochar(run),...encb);else for(let j=0;j<run;j++)out.push(...encb);
+    i+=run;
+  }
+  return new Uint8Array(out);
+}
+function decodeK(data){
+  const out=[];let i=0;
+  while(i<data.length){
+    let count=1;
+    if(session.repeat!=null&&data[i]===session.repeat){count=unchar(data[++i]);i++}
+    let hi=0;
+    if(session.binary!=null&&data[i]===session.binary){hi=128;i++}
+    let b=data[i++];
+    if(b===session.quote&&i<data.length)b=ctl(data[i++]);
+    for(let j=0;j<count;j++)out.push(b|hi);
+  }
+  return new Uint8Array(out);
+}
+function fileAttr(tag,value=""){
+  const v=typeof value==="string"?ascii(value):value;
+  return cat(ascii(tag),cat(new Uint8Array([tochar(v.length)]),v));
+}
+const S_INIT=Uint8Array.from([0x7e,0x30,0x20,0x40,0x2d,0x23,0x59,0x31,0x7e,0x2e,0x22,0x35,0x4d]);
+
+function resetSession(){
+  session={check:1,quote:0x23,binary:null,repeat:0x7e,max:2040,update(d){
+    if(d.length>5&&d[5]!==32)this.quote=d[5];
+    if(d.length>6&&![89,78,32].includes(d[6]))this.binary=d[6];
+    if(d.length>7&&"123".includes(String.fromCharCode(d[7])))this.check=Number(String.fromCharCode(d[7]));
+    if(d.length>8&&d[8]!==32)this.repeat=d[8];
+    if(d.length>12){const m=unchar(d[11])*95+unchar(d[12]);if(m>=60)this.max=Math.min(m,2040)}
+  }};
+}
+
+function enableTransferUi(){
+  $("info").disabled=false;
+  $("refresh").disabled=false;
+  $("send").disabled=!selected;
+  $("tx").disabled=false;
+}
+function disableTransferUi(){
+  $("info").disabled=true;
+  $("refresh").disabled=true;
+  $("send").disabled=true;
+  $("tx").disabled=true;
+}
+
+async function claim(n){
+  if(claimed.has(n))return;
+  await device.claimInterface(n);
+  claimed.add(n);
+  log(`claimInterface(${n}) SUCCESS`);
+}
+async function release(n){
+  if(!claimed.has(n)||!device)return;
+  try{await device.releaseInterface(n)}catch{}
+  claimed.delete(n);
+}
+async function cdcSetup(lineState=3,delay=250){
+  await claim(CONTROL_IF);
+  const lc=new Uint8Array([0x00,0xC2,0x01,0x00,0x00,0x00,0x08]);
+  await device.controlTransferOut({requestType:"class",recipient:"interface",request:0x20,value:0,index:CONTROL_IF},lc);
+  const r=await device.controlTransferOut({requestType:"class",recipient:"interface",request:0x22,value:lineState,index:CONTROL_IF});
+  await sleep(delay);
+  const flags=(lineState&1?"DTR ":"")+(lineState&2?"RTS":"")||"none";
+  log(`CDC 115200 8N1 + ${flags}; waited ${delay} ms; SET_CONTROL_LINE_STATE result=${r.status}.`);
+}
+
+async function drainInput(ms=150){
+  // WebUSB has no non-blocking bulk-IN read. A transferIn() with no data can
+  // remain pending indefinitely, so never use it as a "poll"/drain operation.
+  // Freshly opened + configured Evo sessions are used instead of a browser
+  // serial-style input-buffer flush.
+  rxBuf=new Uint8Array(0);
+  log(`Input drain skipped (${ms} ms requested): WebUSB bulk IN has no non-blocking poll.`);
+  return 0;
+}
+async function clearEndpointHalt(){
+  if(!device||!transport)return;
+  for(const [dir,ep] of [["out",transport.outEp],["in",transport.inEp]]){
+    try{
+      await device.clearHalt(dir,ep);
+      log(`clearHalt(${dir}, EP${ep}) SUCCESS`);
+    }catch(e){
+      log(`clearHalt(${dir}, EP${ep}) unavailable/failed: ${e.message}`);
+    }
+  }
+}
+function bytesHex(b,max=160){
+  const a=Array.from(b||[],x=>x.toString(16).padStart(2,"0"));
+  return a.length>max/3 ? a.slice(0,Math.floor(max/3)).join(" ")+" …" : a.join(" ");
+}
+async function reopenClean(){
+  const wasOpen=!!device.opened;
+  for(const n of [...claimed].reverse())await release(n);
+  try{if(device.opened)await device.close()}catch{}
+  await sleep(300);
+  await withTimeout(device.open(),7000,"device.open() after clean close");
+  if(!device.configuration || device.configuration.configurationValue!==1)
+    await withTimeout(device.selectConfiguration(1),7000,"selectConfiguration(1)");
+  await withTimeout(claim(DATA_IF),7000,"claimInterface(1)");
+  await withTimeout(cdcSetup(3,0),7000,"CDC reference setup");
+  transport={iface:DATA_IF,outEp:CDC_OUT,inEp:CDC_IN,label:"CDC data IF1"};
+  rxBuf=new Uint8Array(0);
+  return wasOpen;
+}
+async function setupProbeProfile(lineState,delay){
+  await reopenClean();
+  await cdcSetup(lineState,delay);
+  await clearEndpointHalt();
+  await drainInput(250);
+  rxBuf=new Uint8Array(0);
+  resetSession(); seq=0;
+}
+async function probeOne(lineState,delay){
+  const flags=(lineState&1?"DTR ":"")+(lineState&2?"RTS":"")||"none";
+  const label=`line=${lineState} (${flags.trim()}), delay=${delay}ms`;
+  log(`\n=== PROBE ${label} ===`);
+  try{
+    await setupProbeProfile(lineState,delay);
+    const pkt=kpacket(0,"S",S_INIT,1);
+    const txHex=bytesHex(pkt,1000);
+    $("wire").textContent=`TX (${pkt.length}): ${txHex}`;
+    log(`Reference Kermit S packet: ${txHex}`);
+    const wr=await withTimeout(device.transferOut(CDC_OUT,pkt),7000,"S packet transferOut");
+    log(`transferOut reported ${wr.bytesWritten} bytes (expected ${pkt.length}).`);
+    const p=await readPacket(transport,5000);
+    const rx=bytesHex(p.raw,1000);
+    log(`RX ${p.type}, seq=${p.seq}, data=${p.data.length}: ${rx}`);
+    if(p.type==="Y"){
+      resetSession(); session.update(p.data);
+      return {ok:true,label,reply:p.type,seq:p.seq,data:p.data.length,rx};
+    }
+    if(p.type==="N"){
+      await drainInput(100);
+      // Match the reference implementation: retry the identical packet.
+      for(let a=2;a<=3;a++){
+        await withTimeout(device.transferOut(CDC_OUT,pkt),7000,`retry ${a} transferOut`);
+        const q=await readPacket(transport,5000);
+        log(`Retry ${a}: RX ${q.type}, seq=${q.seq}, data=${q.data.length}: ${bytesHex(q.raw,1000)}`);
+        if(q.type==="Y"){
+          resetSession(); session.update(q.data);
+          return {ok:true,label,reply:q.type,seq:q.seq,data:q.data.length,rx:bytesHex(q.raw,1000),retry:a};
+        }
+        // No non-blocking browser-side IN flush; keep the Kermit retry exact.
+      }
+      return {ok:false,label,reply:"N",error:"NAK after 3 identical-packet attempts",rx};
+    }
+    return {ok:false,label,reply:p.type,error:`Unexpected Kermit ${p.type}`,rx};
+  }catch(e){
+    return {ok:false,label,reply:"ERR",error:e.message};
+  }
+}
+async function runFullProbe(){
+  if(!device)throw Error("Connect the Evo first.");
+  $("probe").disabled=true; $("handshake").disabled=true;
+  $("probeTable").textContent="Running…";
+  $("probeResult").textContent="Testing clean sessions and Kermit initialization…";
+  const profiles=[
+    [3,0],[3,100],[3,250],[3,500],
+    [1,0],[1,100],[1,250],[1,500],
+    [0,0],[0,250],[2,250]
+  ];
+  const results=[];
+  for(let i=0;i<profiles.length;i++){
+    const [ls,d]=profiles[i];
+    $("probeResult").textContent=`Probe ${i+1}/${profiles.length}: line state ${ls}, delay ${d} ms`;
+    const r=await probeOne(ls,d); results.push(r);
+    const tr=results.map(x=>`<div><b>${esc(x.label)}</b> — ${x.ok?'<span class="stage-ok">SUCCESS</span>':`<span class="stage-bad">${esc(x.reply||"FAIL")}</span>`}${x.error?` — ${esc(x.error)}`:""}</div>`).join("");
+    $("probeTable").innerHTML=tr;
+    if(r.ok){
+      stage(7,"SUCCESS — accepted by Evo","ok");
+      stage(8,"SUCCESS — response received","ok");
+      stage(9,`SUCCESS — Kermit ${r.reply}`,"ok");
+      $("probeResult").textContent=`SUCCESS: ${r.label}.`;
+      status("Kermit connected",`Evo accepted the reference Kermit S packet using ${r.label}.`,true);
+      transport={iface:DATA_IF,outEp:CDC_OUT,inEp:CDC_IN,label:"CDC data IF1"};
+      $("info").disabled=false;$("refresh").disabled=false;$("tx").disabled=false;
+      $("send").disabled=!selected;
+      $("handshake").disabled=true;
+      $("probe").disabled=false;
+      return;
+    }
+  }
+  $("probeResult").textContent="No profile received a Kermit Y/ACK. The matrix and raw bytes are ready for diagnosis.";
+  status("Kermit not established","USB is working, but no tested CDC initialization profile was accepted.",true,"warn");
+  $("handshake").disabled=false;$("probe").disabled=false;
+  $("info").disabled=true;$("refresh").disabled=true;$("tx").disabled=true;$("send").disabled=true;
+  throw Error("All Kermit probe profiles failed.");
+}
+
+function stage(n, text, cls=""){
+  const el=$(`s${n}`);
+  if(!el)return;
+  el.textContent=text;
+  el.className=cls ? `stage-${cls}` : "";
+}
+function withTimeout(promise, ms, label){
+  return Promise.race([
+    promise,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error(`${label} timed out after ${ms/1000}s`)),ms))
+  ]);
+}
+
+async function openBase(){
+  stage(1,"Waiting for chooser…");
+  status("Waiting for USB chooser","Select TI-84 Evo in the white Android dialog…");
+  device=await withTimeout(
+    navigator.usb.requestDevice({filters:[{vendorId:VID,productId:PID}]}),
+    20000,
+    "USB chooser"
+  );
+  stage(1,`SUCCESS — ${device.productName||"TI-84 Evo"}`,"ok");
+  log(`Chooser returned: ${device.productName||"TI-84 Evo"} (${hex(device.vendorId)}:${hex(device.productId)})`);
+
+  stage(2,"Opening…");
+  status("Opening USB device","Calling device.open()…");
+  await withTimeout(device.open(),7000,"device.open()");
+  stage(2,"SUCCESS","ok");
+  log("device.open() SUCCESS");
+
+  stage(3,"Selecting configuration 1…");
+  if(!device.configuration || device.configuration.configurationValue!==1){
+    await withTimeout(device.selectConfiguration(1),7000,"selectConfiguration(1)");
+  }
+  stage(3,`SUCCESS — config ${device.configuration?.configurationValue ?? "?"}`,"ok");
+  log(`Configuration ${device.configuration?.configurationValue ?? "?"} ready.`);
+  for(const it of device.configuration.interfaces||[]){
+    for(const alt of it.alternates||[]){
+      log(`IF${it.interfaceNumber} alt${alt.alternateSetting}: class=${hex(alt.interfaceClass,2)} sub=${hex(alt.interfaceSubclass,2)} proto=${hex(alt.interfaceProtocol,2)} eps=${(alt.endpoints||[]).map(e=>`${e.direction} EP${e.endpointNumber}/max${e.packetSize}`).join(",")}`);
+    }
+  }
+
+  stage(4,"Claiming IF0…");
+  await withTimeout(claim(CONTROL_IF),7000,"claimInterface(0)");
+  stage(4,"SUCCESS","ok");
+
+  stage(5,"Sending CDC line coding…");
+  await withTimeout(cdcSetup(),7000,"CDC setup");
+  stage(5,"SUCCESS — 115200 8N1","ok");
+
+  stage(6,"Claiming IF1…");
+  await withTimeout(claim(DATA_IF),7000,"claimInterface(1)");
+  stage(6,"SUCCESS","ok");
+
+  $("device").classList.remove("hidden");
+  $("support").textContent="WebUSB connected";
+  $("support").className="pill ok";
+  $("connect").disabled=true;
+  $("disconnect").disabled=false;
+  disableTransferUi();
+  $("handshake").disabled=true;
+  $("iface").textContent="1 / CDC data";
+  $("eps").textContent="OUT 1 / IN 2";
+  $("transport").textContent="WebUSB — USB connected";
+  status("USB connected","Starting Kermit automatically…",true);
+}
+
+async function handshakePath(iface,outEp,inEp,label){
+  if(!claimed.has(iface)){
+    stage(6,`Claiming IF${iface}…`);
+    await withTimeout(claim(iface),7000,`claimInterface(${iface})`);
+  }
+  transport={iface,outEp,inEp,label};
+  rxBuf=new Uint8Array(0);
+  resetSession();
+  seq=0;
+
+  stage(7,`Building exact Evo Kermit S packet…`);
+  const sPacket=kpacket(0,"S",S_INIT);
+  const txHex=Array.from(sPacket,b=>b.toString(16).padStart(2,"0")).join(" ");
+  $("wire").textContent=`TX (${sPacket.length} bytes): ${txHex}`;
+  log(`Exact reference S packet TX (${sPacket.length} bytes): ${txHex}`);
+
+  for(let attempt=1;attempt<=3;attempt++){
+    stage(7,`Sending Kermit S packet — attempt ${attempt}/3…`);
+    status("Kermit handshake",`Sending S packet on ${label}…`,true);
+    await withTimeout(write(sPacket),7000,"Kermit S packet transferOut");
+    log(`S packet transferOut attempt ${attempt} SUCCESS`);
+
+    stage(8,`Waiting for Evo ACK — attempt ${attempt}/3…`,"warn");
+    try{
+      const p=await readPacket(transport,5000);
+      const rxHex=Array.from(p.raw||[],b=>b.toString(16).padStart(2,"0")).join(" ");
+      $("wire").textContent=`RX (${p.raw?.length||0} bytes): ${rxHex || "(packet parsed)"}`;
+      log(`RX Kermit ${p.type}, seq=${p.seq}, data=${p.data.length} bytes${rxHex?`: ${rxHex}`:""}`);
+      if(p.type==="Y"){
+        stage(8,"SUCCESS — ACK received","ok");
+        session.update(p.data);
+        stage(9,`SUCCESS — Kermit Y/ACK (check ${session.check})`,"ok");
+        log(`Kermit handshake succeeded on ${label}; check=${session.check}, max=${session.max}`);
+        seq=1;
+        kermitReady=true;
+        return true;
+      }
+      if(p.type==="N"){
+        log(`Evo sent NAK on attempt ${attempt}; retrying exact same S packet.`);
+        continue;
+      }
+      throw Error(`Expected Kermit Y/ACK, got ${p.type}`);
+    }catch(e){
+      if(attempt===3)throw e;
+      log(`Attempt ${attempt} read failed: ${e.message}; retrying.`);
+    }
+  }
+  throw Error("Evo NAK'd the S packet after 3 retries.");
+}
+
+async function runHandshake(){
+  if(!device)throw Error("Connect the Evo first.");
+  if(!claimed.has(DATA_IF))throw Error("CDC data interface is not claimed.");
+  transport=null;
+  rxBuf=new Uint8Array(0);
+  $("wire").textContent="Wire: starting Kermit probe…";
+  for(let n=7;n<=9;n++)stage(n,"Not started");
+
+  try{
+    await cdcSetup(0,150);
+  await cdcSetup(3,500);
+    await clearEndpointHalt();
+    await drainInput(250);
+    await handshakePath(DATA_IF,CDC_OUT,CDC_IN,"CDC data IF1");
+    $("iface").textContent="1 / CDC data";
+    $("eps").textContent="OUT 1 / IN 2";
+    $("transport").textContent="WebUSB → Kermit";
+    $("handshake").disabled=true;
+    $("info").disabled=false;
+    $("refresh").disabled=false;
+    $("tx").disabled=false;
+    $("send").disabled=!selected;
+    status("Connected","Kermit handshake succeeded. Ready for file transfers.",true);
+    log("HANDSHAKE SUCCESS — S packet only. No file operation was started automatically.");
+    $("txResult").textContent="Handshake verified. Use Refresh files / Run directory transaction to test the next Kermit phase.";
+  }catch(e){
+    transport=null;
+    rxBuf=new Uint8Array(0);
+    stage(9,`FAILED — ${e.message}`,"bad");
+    $("handshake").disabled=false;
+    status("USB connected","Kermit S-INIT or a following transaction failed. See the wire log for the exact packet sequence.",true,"warn");
+    log("HANDSHAKE FAILED: "+e.message);
+    throw e;
+  }
+}
+
+async function resetUsb(){
+  if(!device) return;
+  log("Requesting USB device reset…");
+  try{
+    if(typeof device.reset!=="function")throw Error("USBDevice.reset() is unavailable in this Chrome build.");
+    await withTimeout(device.reset(),8000,"USB reset");
+    log("USB reset completed. Re-opening device…");
+  }catch(e){
+    log("USB reset failed: "+e.message);
+    return;
+  }
+  try{
+    kermitReady=false;
+    await openBase();
+    status("USB connected","USB reset complete. Reloading files automatically…",true);
+    await refreshFiles();
+  }catch(e){
+    log("Re-open after reset failed: "+e.message);
+    status("Reset/reconnect problem",e.message,false,"bad");
+  }
+}
+
+async function connect(){
+  if(!window.isSecureContext)throw Error("This page must be HTTPS (or localhost).");
+  if(!navigator.usb)throw Error("WebUSB is not available in this browser.");
+  await openBase();
+  await refreshFiles();
+}
+
+async function disconnect(){
+  try{
+    if(device){
+      for(const n of [...claimed].reverse())await release(n);
+      try{await device.close()}catch{}
+    }
+  }finally{
+    device=null;transport=null;session=null;kermitReady=false;claimed.clear();rxBuf=new Uint8Array(0);
+    $("device").classList.add("hidden");
+    $("connect").disabled=false;
+    $("handshake").disabled=true;
+    $("probe").disabled=true;
+    $("disconnect").disabled=true;
+    $("reset").disabled=true;
+    $("info").disabled=$("refresh").disabled=$("tx").disabled=$("send").disabled=true;
+    $("cancel").disabled=true;
+    $("support").textContent="WebUSB available";
+    $("support").className="pill";
+    status("Disconnected","Connect the powered-on Evo with a USB-C data cable.");
+    for(let i=1;i<=9;i++)stage(i,"Not started");
+    log("Disconnected.");
+  }
+}
+
+
+async function write(data){
+  if(!transport)throw Error("No active Kermit transport.");
+  const r=await device.transferOut(transport.outEp,data);
+  if(r?.bytesWritten!==undefined && r.bytesWritten!==data.length)
+    throw Error(`USB OUT short write: ${r.bytesWritten}/${data.length} bytes`);
+  return r;
+}
+async function transferInTimed(ep, length, ms){
+  return await Promise.race([
+    device.transferIn(ep,length),
+    new Promise((_,reject)=>setTimeout(()=>reject(Error(`USB IN timed out after ${ms/1000}s`)),ms))
+  ]);
+}
+async function readPacket(t=transport,ms=TIMEOUT){
+  const end=Date.now()+ms;
+  while(Date.now()<end){
+    const remain=Math.max(250, end-Date.now());
+    const r=await device.transferIn(t.inEp,512);
+    if(!r?.data)continue;
+    const x=new Uint8Array(r.data.buffer.slice(r.data.byteOffset,r.data.byteOffset+r.data.byteLength));
+    rxBuf=cat(rxBuf,x);
+    log(`USB IN ${x.length} bytes: ${bytesHex(x,900)}`);
+    let p=rxBuf.indexOf(13);
+    while(p>=0){
+      const raw=rxBuf.slice(0,p+1);
+      rxBuf=rxBuf.slice(p+1);
+      if(raw[0]===1){
+        const parsed=parsePacket(raw);
+        parsed.raw=raw;
+        return parsed;
+      }
+      log(`Ignoring non-Kermit bytes before CR: ${bytesHex(raw,900)}`);
+      p=rxBuf.indexOf(13);
+    }
+  }
+  throw Error("Kermit packet read timed out");
+}
+async function kermitSend(type,data=new Uint8Array()){
+  if(!transport)throw Error("No active Kermit transport.");
+  const sentSeq=seq;
+  const pkt=kpacket(sentSeq,type,data);
+  const txHex=bytesHex(pkt,1400);
+  $("lastExchange").className="small";
+  $("lastExchange").textContent=`TX ${type} seq=${sentSeq}: ${txHex}`;
+  log(`TX ${type} seq=${sentSeq} (${pkt.length} bytes): ${txHex}`);
+  for(let attempt=1;attempt<=3;attempt++){
+    if(attempt>1){
+      // This is intentionally the exact same packet, matching evo_usb_py.
+      await sleep(100);
+      log(`Retrying exact ${type} seq=${sentSeq}; attempt ${attempt}/3.`);
+    }
+    const wr=await withTimeout(write(pkt),7000,`${type} transferOut`);
+    log(`OUT ${type} seq=${sentSeq}: ${wr?.bytesWritten ?? pkt.length}/${pkt.length} bytes`);
+    try{
+      const r=await readPacket(transport,TIMEOUT);
+      const rxHex=bytesHex(r.raw,1400);
+      $("lastExchange").textContent=`RX ${r.type} seq=${r.seq} for ${type} seq=${sentSeq}: ${rxHex}`;
+      log(`RX ${r.type} seq=${r.seq} for ${type} seq=${sentSeq} (${r.raw.length} bytes): ${rxHex}`);
+      if(r.type==="Y"){
+        if(r.seq!==sentSeq){
+          log(`Ignoring stale/mismatched ACK seq=${r.seq}; expected seq=${sentSeq}.`);
+          continue;
+        }
+        if(type==="S")session.update(r.data);
+        $("lastExchange").className="small ok";
+        seq=(sentSeq+1)%64;
+        return r.data;
+      }
+      if(r.type==="E"){
+        throw Error(`Evo transfer error on ${type} seq ${sentSeq}: ${text(r.data) || bytesHex(r.data)}`);
+      }
+      if(r.type==="N"){
+        $("lastExchange").textContent=`NAK for ${type} seq=${sentSeq}: ${rxHex}`;
+        $("lastExchange").className="small bad";
+        log(`Kermit NAK received for ${type} seq=${sentSeq}. RAW NAK: ${rxHex}`);
+        continue;
+      }
+      throw Error(`Unexpected Kermit ${r.type} while waiting for ACK to ${type} seq ${sentSeq}: ${rxHex}`);
+    }catch(e){
+      if(attempt===3)throw e;
+      log(`${type} seq=${sentSeq} attempt ${attempt} did not complete: ${e.message}`);
+    }
+  }
+  throw Error(`Kermit NAK for ${type} seq ${sentSeq} after 3 retries`);
+}
+async function prepareKermitSession(){
+  if(!device||!device.opened)throw Error("No active USB device.");
+  // Do NOT close/reopen here: Android WebUSB can retain a claimed interface
+  // across close/open and then reject a second claim. The connection established
+  // by the user already has IF0/IF1 claimed and is the working transport.
+  transport={iface:DATA_IF,outEp:CDC_OUT,inEp:CDC_IN,label:"CDC data IF1"};
+  await cdcSetup(0,150);
+  await cdcSetup(3,500);
+  await clearEndpointHalt();
+  rxBuf=new Uint8Array(0);
+  resetSession();
+  seq=0;
+  log("Kermit session prepared on the existing claimed CDC session: DTR+RTS, 115200 8N1, clearHalt, seq=0.");
+}
+async function startSession(){
+  // IMPORTANT: the Evo does not reliably remain ready for F/A traffic after
+  // the standalone diagnostic S-INIT button returns to the browser UI.
+  // Therefore every real file transaction starts a fresh, continuous
+  // reference-style S→F→A→D→Z→B exchange. The standalone handshake remains
+  // a diagnostic only and is never reused as a file-transfer session.
+  await prepareKermitSession();
+  $("txResult").textContent="Starting Kermit automatically…";
+  stage(7,"Sending Kermit S-INIT…");
+  status("Starting Kermit","Initializing the calculator link…",true);
+  log("Starting a fresh continuous Kermit transaction: S→F→A→D→Z→B.");
+  await kermitSend("S",S_INIT);
+  stage(7,"SUCCESS — S-INIT accepted","ok");
+  stage(8,"SUCCESS — Evo responded","ok");
+  stage(9,`SUCCESS — Kermit Y/ACK (check ${session.check})`,"ok");
+  log("S ACK accepted; waiting 200 ms before F to match the calculator's serial state transition.");
+  await sleep(200);
+  kermitReady=true;
+  enableTransferUi();
+  $("handshake").disabled=true;
+}
+async function ackPacket(r, includeData=false){
+  // Reference implementation: ACK to server S includes its initialization
+  // data; ACKs to server F/A/D/Z/B are empty.
+  const ackData=includeData ? r.data : new Uint8Array();
+  const pkt=kpacket(r.seq,"Y",ackData);
+  log(`TX Y/ACK seq=${r.seq} data=${ackData.length} (${pkt.length} bytes): ${bytesHex(pkt,900)}`);
+  await write(pkt);
+}
+async function getRequest(url){
+  await startSession();
+  $("txResult").textContent="S-INIT complete. Sending F (file/request URL)…";
+  log(`GET request URL: ${url}`);
+  await kermitSend("F",ascii(url));
+  $("txResult").textContent="F acknowledged. Sending A (attributes)…";
+  const attrs=Uint8Array.from([0x22,0x22,0x42,0x38,0x31,0x21,0x31,0x40,0x20]);
+  log(`GET attributes HARD-CODED reference bytes (${attrs.length}): ${bytesHex(attrs,900)}`);
+  log(`Expected reference A packet payload: 22 22 42 38 31 21 31 40 20`);
+  if(!eq(attrs,Uint8Array.from([0x22,0x22,0x42,0x38,0x31,0x21,0x31,0x40,0x20]))) throw Error("Internal A-attribute construction error");
+  await kermitSend("A",attrs);
+  $("txResult").textContent="A acknowledged. Sending D (directory request)…";
+  await kermitSend("D",new Uint8Array([0x68]));
+  $("txResult").textContent="D acknowledged. Sending Z/B (end request)…";
+  await kermitSend("Z");
+  await kermitSend("B");
+  $("txResult").textContent="Request accepted. Waiting for Evo directory response…";
+
+  log("Waiting for Evo server response: S, F, A, D*, Z, B.");
+  let r=await readPacket(); if(r.type!=="S")throw Error(`Expected server S, got ${r.type} seq=${r.seq}`);
+  log(`Server S seq=${r.seq} data=${bytesHex(r.data,900)}`);
+  // Kermit S ACK carries the server initialization string.
+  await ackPacket(r, true);
+
+  r=await readPacket(); if(r.type!=="F")throw Error(`Expected server F, got ${r.type} seq=${r.seq}`);
+  log(`Server F seq=${r.seq} data=${bytesHex(r.data,1400)}`);
+  await ackPacket(r, false);
+
+  r=await readPacket(); if(r.type!=="A")throw Error(`Expected server A, got ${r.type} seq=${r.seq}`);
+  log(`Server A seq=${r.seq} data=${bytesHex(r.data,1400)}`);
+  await ackPacket(r, false);
+
+  const chunks=[];
+  while(true){
+    r=await readPacket();
+    log(`Server ${r.type} seq=${r.seq} data=${r.data.length} bytes: ${bytesHex(r.data,900)}`);
+    await ackPacket(r);
+    if(r.type==="Z")break;
+    if(r.type==="D")chunks.push(r.data);
+    else throw Error(`Unexpected server packet ${r.type} seq=${r.seq}`);
+  }
+  r=await readPacket();
+  log(`Server final ${r.type} seq=${r.seq}`);
+  if(r.type==="B")await ackPacket(r, false);
+  else throw Error(`Expected server B, got ${r.type} seq=${r.seq}`);
+  kermitReady=false;
+  return decodeK(chunks.reduce(cat,new Uint8Array()));
+}
+async function sendPkt(type,data=new Uint8Array()){
+  return await kermitSend(type,data);
+}
+async function startTransfer(){
+  await startSession();
+}
+const CBOR_BREAK = { break: true };
+function cborLen(data,off,a){
+  if(a<24)return[a,off];
+  if(a===24)return[data[off],off+1];
+  if(a===25)return[(data[off]<<8)|data[off+1],off+2];
+  if(a===26)return[((data[off]*2**24)+(data[off+1]<<16)+(data[off+2]<<8)+data[off+3]),off+4];
+  if(a===27){
+    const dv=new DataView(data.buffer,data.byteOffset+off,8);
+    return[dv.getFloat64(0,false),off+8];
+  }
+  if(a===31)return[null,off];
+  throw Error(`Unsupported CBOR length/additional info ${a}`);
+}
+function cbor(data,off=0){
+  if(off>=data.length)throw Error("Unexpected end of CBOR");
+  const z=data[off++],m=z>>5,a=z&31;
+  if(m===0){const[v,o]=cborLen(data,off,a);if(v===null)throw Error("Indefinite unsigned integer");return[v,o]}
+  if(m===1){const[v,o]=cborLen(data,off,a);if(v===null)throw Error("Indefinite negative integer");return[-1-v,o]}
+  if(m===2||m===3){
+    if(a!==31){const[n,o]=cborLen(data,off,a),v=data.slice(o,o+n);return[m===2?v:text(v),o+n]}
+    let q=off, parts=[];
+    while(true){
+      if(q>=data.length)throw Error("Unterminated indefinite CBOR string");
+      if(data[q]===0xff)return[m===2?parts.reduce((a,b)=>{const r=new Uint8Array(a.length+b.length);r.set(a);r.set(b,a.length);return r},new Uint8Array()):parts.join(""),q+1];
+      const [part,nq]=cbor(data,q);
+      if(!(m===2?part instanceof Uint8Array:typeof part==="string"))throw Error("Invalid indefinite CBOR string chunk");
+      parts.push(part);q=nq;
+    }
+  }
+  if(m===4){
+    if(a===31){let v=[],q=off;while(true){if(q>=data.length)throw Error("Unterminated indefinite CBOR array");if(data[q]===0xff)return[v,q+1];const[x,p]=cbor(data,q);if(x===CBOR_BREAK)throw Error("Unexpected CBOR break");v.push(x);q=p}}
+    const[n,o]=cborLen(data,off,a),v=[];let q=o;for(let i=0;i<n;i++){const[x,p]=cbor(data,q);v.push(x);q=p}return[v,q]
+  }
+  if(m===5){
+    if(a===31){let v={},q=off;while(true){if(q>=data.length)throw Error("Unterminated indefinite CBOR map");if(data[q]===0xff)return[v,q+1];const[k,p]=cbor(data,q);if(k===CBOR_BREAK)throw Error("Unexpected CBOR break");const[x,r]=cbor(data,p);if(x===CBOR_BREAK)throw Error("Unexpected CBOR break as map value");v[typeof k==="string"?k:String(k)]=x;q=r}}
+    const[n,o]=cborLen(data,off,a),v={};let q=o;for(let i=0;i<n;i++){const[k,p]=cbor(data,q),[x,r]=cbor(data,p);v[typeof k==="string"?k:String(k)]=x;q=r}return[v,q]
+  }
+  if(m===7){
+    if(a===20)return[false,off];
+    if(a===21)return[true,off];
+    if(a===22)return[null,off];
+    if(a===23)return[undefined,off];
+    if(a===25){if(off+2>data.length)throw Error("Truncated CBOR float16");return[null,off+2]}
+    if(a===26){if(off+4>data.length)throw Error("Truncated CBOR float32");const dv=new DataView(data.buffer,data.byteOffset+off,4);return[dv.getFloat32(0,false),off+4]}
+    if(a===27){if(off+8>data.length)throw Error("Truncated CBOR float64");const dv=new DataView(data.buffer,data.byteOffset+off,8);return[dv.getFloat64(0,false),off+8]}
+    if(a===31)return[CBOR_BREAK,off];
+  }
+  throw Error(`Unsupported CBOR major=${m} additional=${a}`);
+}
+function tokenWords(b){
+  const words=[];
+  if(!(b instanceof Uint8Array))return words;
+  for(let i=0;i+1<b.length;i+=2){const w=b[i]|(b[i+1]<<8);if(w===0)break;words.push(w)}
+  return words;
+}
+function decodeCustomName(b){
+  const out=[];
+  for(const w of tokenWords(b)){
+    if(w>=0xE800&&w<=0xE819)out.push(String.fromCharCode(65+w-0xE800));
+    else if(w>=0x0061&&w<=0x007A)out.push(String.fromCharCode(w));
+    else if(w>=0x0041&&w<=0x005A)out.push(String.fromCharCode(w));
+    else if(w>=0x0030&&w<=0x0039)out.push(String.fromCharCode(w));
+    else if(w>=0xE401&&w<=0xE40A)out.push(String.fromCharCode(48+w-0xE401));
+    else if(w===0x005F||w===0xE400)out.push("_");
+    else if(w===0xE81A)out.push("θ");
+    else return null;
+  }
+  return out.length?out.join(""):null;
+}
+const COMMON_TOKEN_NAMES={
+  0:Object.assign({},Object.fromEntries(Array.from({length:26},(_,i)=>[0xE800+i,String.fromCharCode(65+i)])),{0xE81A:"theta"}),
+  1:Object.fromEntries(Array.from({length:6},(_,i)=>[0xE830+i,`L${i+1}`])),
+  3:Object.assign({0xE899:"GDB0"},Object.fromEntries(Array.from({length:9},(_,i)=>[0xE890+i,`GDB${i+1}`]))),
+  4:Object.assign({0xE889:"Pic0"},Object.fromEntries(Array.from({length:9},(_,i)=>[0xE880+i,`Pic${i+1}`]))),
+  5:Object.assign({0xE8B9:"Image0"},Object.fromEntries(Array.from({length:9},(_,i)=>[0xE8B0+i,`Image${i+1}`]))),
+  6:Object.fromEntries(Array.from({length:10},(_,i)=>[0xE820+i,String.fromCharCode(65+i)])),
+  10:Object.assign({0xE8A9:"Str0"},Object.fromEntries(Array.from({length:9},(_,i)=>[0xE8A0+i,`Str${i+1}`]))),
+  12:{0xE8BA:"Window"},13:{0xE8BB:"RclWindw"},14:{0xE8BC:"TblSet"}
+};
+function directoryDisplayName(item){
+  const tok=item?.tokName instanceof Uint8Array?item.tokName:new Uint8Array();
+  const type=item?.type;
+  const words=tokenWords(tok);
+  if([2,8,9,15,18].includes(type)){const custom=decodeCustomName(tok);if(custom)return custom;}
+  if(type===1&&words[0]===0xE836){const custom=decodeCustomName(tok.slice(2));if(custom)return custom;}
+  if(words.length===1){const table=COMMON_TOKEN_NAMES[type]||{};if(table[words[0]])return table[words[0]];const w=words[0];
+    if(type===7){
+      if(w>=0xE840&&w<=0xE849)return `Y${w===0xE849?0:w-0xE840+1}`;
+      if(w>=0xE850&&w<=0xE85B){const idx=Math.floor((w-0xE850)/2)+1;return `${((w-0xE850)%2===0)?"X":"Y"}${idx}T`;}
+      if(w>=0xE860&&w<=0xE865)return `r${w-0xE860+1}`;
+      if(w>=0xE870&&w<=0xE872)return String.fromCharCode(117+w-0xE870);
+    }
+  }
+  const name=item?.dispName??tok;
+  if(name instanceof Uint8Array)return text(name);
+  return String(name||"?");
+}
+function tokenName(b){return directoryDisplayName({tokName:b,type:15})||text(b)}
+function ext(type){return({0:"8xn2",1:"8xl2",2:"8xp2",3:"8xd2",4:"8ci2",5:"8ca2",6:"8xm2",7:"8xy2",8:"8xv2",10:"8xs2",12:"8xw2",13:"8xz2",14:"8xt2",15:"8xpy2",18:"8mp2"})[type]||"bin"}
+function tokenWordsForName(name){
+  const words=[];
+  for(const c of name.toUpperCase()){
+    if(c>="A"&&c<="Z")words.push(0xE800+c.charCodeAt(0)-65);
+    else if(c>="0"&&c<="9")words.push(0xE401+c.charCodeAt(0)-48);
+    else if(c==="Θ"||c==="θ")words.push(0xE81A);
+    else throw Error(`Unsupported Evo name character: ${c}`);
+  }
+  return words;
+}
+function tokenEncodeName(name){
+  const w=tokenWordsForName(name),out=new Uint8Array(w.length*2);w.forEach((v,i)=>{out[i*2]=v&255;out[i*2+1]=v>>8});return out;
+}
+function urlEncodeName(name){
+  let out="";
+  for(const w of tokenWordsForName(name))for(const b of enc.encode(String.fromCodePoint(w)))out+=`%${b.toString(16).padStart(2,"0").toUpperCase()}`;
+  return out;
+}
+function tokenUrlName(b){
+  if(!(b instanceof Uint8Array))return encodeURIComponent(String(b));
+  let out="";
+  for(const w of tokenWords(b))for(const q of enc.encode(String.fromCodePoint(w)))out+=`%${q.toString(16).padStart(2,"0").toUpperCase()}`;
+  return out;
+}
+function evoChecksum(data){
+  const adjusted=data.length-3;if(adjusted<0)return 0;let words=adjusted>>1;if(adjusted&1&&words>0)words--;let c=0;for(let i=0;i<words;i++)c^=data[i*2]|(data[i*2+1]<<8);return c&0xffff;
+}
+function appendEvoChecksum(data){const c=evoChecksum(data);return cat(data,new Uint8Array([c>>8,c&255]));}
+function cborLoads(data){const [v,o]=cbor(data);if(o!==data.length)throw Error(`Trailing CBOR data (${data.length-o} bytes)`);return v;}
+function evoFileType(data){try{const obj=cborLoads(data.slice(0,-2));return obj?.metaData?.type??null}catch{return null}}
+function splitElementAligned(wire,chunkSize=2000){
+  const chunks=[];let pos=0,start=0;
+  while(pos<wire.length){
+    if(wire[pos]===0x7e&&pos+2<wire.length){pos+=2;if(wire[pos]===0x23&&pos+1<wire.length)pos+=2;else pos+=1;}
+    else if(wire[pos]===0x23&&pos+1<wire.length)pos+=2;else pos++;
+    if(pos-start>=chunkSize){chunks.push(wire.slice(start,pos));start=pos;}
+  }
+  if(start<wire.length)chunks.push(wire.slice(start));
+  return chunks;
+}
+function buildAppvar(name,source){
+  const src=enc.encode(source),nameB=ascii(name.toUpperCase()),total=18+nameB.length+src.length;
+  const out=new Uint8Array(total),dv=new DataView(out.buffer);out.set([0x13,0x01,0,0],0);dv.setUint32(4,total,true);out[8]=nameB.length;out.set(nameB,12);out[12+nameB.length]=0;dv.setUint16(13+nameB.length,src.length,true);out.set([0,2],15+nameB.length);out.set(src,17+nameB.length);out[17+nameB.length+src.length]=0;return out;
+}
+function cborText(s){const b=enc.encode(s),n=b.length;if(n<24)return cat(new Uint8Array([0x60|n]),b);if(n<256)return cat(new Uint8Array([0x78,n]),b);if(n<65536)return cat(new Uint8Array([0x79,n>>8,n&255]),b);throw Error("CBOR text too long");}
+function cborUint(n){if(n<24)return new Uint8Array([n]);if(n<256)return new Uint8Array([0x18,n]);if(n<65536)return new Uint8Array([0x19,n>>8,n&255]);return new Uint8Array([0x1a,(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255]);}
+function cborBytes(b){const n=b.length;if(n<24)return cat(new Uint8Array([0x40|n]),b);if(n<256)return cat(new Uint8Array([0x58,n]),b);if(n<65536)return cat(new Uint8Array([0x59,n>>8,n&255]),b);return cat(new Uint8Array([0x5a,(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255]),b);}
+function buildPythonPayload(name,source){
+  const app=buildAppvar(name,source),tok=tokenEncodeName(name);
+  let x=new Uint8Array([0xbf]);
+  x=cat(x,cborText("metaData"));x=cat(x,new Uint8Array([0xbf]));x=cat(x,cborText("type"));x=cat(x,cborUint(15));x=cat(x,cborText("version"));x=cat(x,cborUint(1));x=cat(x,cborText("name"));x=cat(x,cborBytes(tok));x=cat(x,new Uint8Array([0xff]));x=cat(x,cborText("version"));x=cat(x,cborUint(1));x=cat(x,cborText("size"));x=cat(x,cborUint(app.length));x=cat(x,cborText("data"));x=cat(x,cborBytes(app));x=cat(x,new Uint8Array([0xff]));return x;
+}
+async function refreshFiles(){
+  if(transactionRunning){ log("A transaction is already running."); return; }
+  transactionRunning=true; cancelRequested=false; $("cancel").disabled=false;
+  $("txResult").textContent="Running a fresh continuous directory GET transaction (S→F→A→D→Z→B)…";
+  status("Reading files","Running reference-style Kermit GET for the Evo directory…",true);
+  try{
+    const url="hh01/get/hh01/inf/res?name=directory&gotohome=1";
+    const raw=await getRequest(url);
+    log(`Directory payload received: ${raw.length} bytes`);
+    const [obj]=cbor(raw);
+    files=(obj?.data||[]).map(x=>({name:directoryDisplayName(x),type:x.type??0,size:x.size??0,mem:x.mem?"RAM":"Archive",tok:x.tokName instanceof Uint8Array?x.tokName:new Uint8Array()}));
+    $("files").innerHTML=files.length?files.map((x,i)=>`<div class="row"><div class="name"><b>${esc(x.name)}</b><small>${x.size} B • ${x.mem} • .${ext(x.type)}</small></div><div><button data-i="${i}" class="primary">Download</button><button data-del="${i}" class="secondary">Delete</button></div></div>`).join(""):'<div class="empty">No files reported.</div>';
+    [...$("files").querySelectorAll("button[data-i]")].forEach(b=>b.onclick=()=>downloadFile(files[Number(b.dataset.i)]));
+    [...$("files").querySelectorAll("button[data-del]")].forEach(b=>b.onclick=()=>deleteFile(files[Number(b.dataset.del)]));
+    enableTransferUi();
+    $("txResult").textContent=`DIRECTORY GET SUCCESS — ${files.length} file(s), ${raw.length} payload bytes.`;
+    status("Connected",`${files.length} file(s) found.`,true);
+    log("DIRECTORY TRANSACTION SUCCESS");
+  }catch(e){
+    $("txResult").textContent=`DIRECTORY GET FAILED — ${e.message}`;
+    $("lastExchange").className="small bad";
+    log("DIRECTORY TRANSACTION FAILED: "+e.message);
+    status(cancelRequested?"Transaction cancelled":"Kermit transaction failed",e.message,true,"bad");
+    throw e;
+  }finally{
+    transactionRunning=false; cancelRequested=false; $("cancel").disabled=true;
+  }
+}
+
+async function cancelTransaction(){
+  if(!transactionRunning)return;
+  cancelRequested=true;
+  $("txResult").textContent="Cancelling… resetting the USB session to release any pending bulk-IN transfer.";
+  log("CANCEL requested: resetting USB session.");
+  try{
+    if(device?.reset) await device.reset();
+  }catch(e){ log("USB reset during cancel: "+e.message); }
+  try{
+    if(device?.opened) await device.close();
+  }catch{}
+  device=null; transport=null; session=null; claimed.clear(); rxBuf=new Uint8Array(0);
+  $("device").classList.add("hidden");
+  $("connect").disabled=false;
+  $("handshake").disabled=true; $("probe").disabled=true; $("disconnect").disabled=true; $("reset").disabled=true;
+  $("info").disabled=$("refresh").disabled=$("tx").disabled=$("send").disabled=true;
+    $("cancel").disabled=true;
+  $("cancel").disabled=true;
+  status("Cancelled","USB session released. Reconnect the Evo to continue.");
+}
+
+async function downloadFile(item){
+  if(transactionRunning)return;
+  transactionRunning=true;$('cancel').disabled=false;
+  try{
+    status("Downloading",`Getting ${item.name}…`,true);log(`GET ${item.name} type ${item.type}`);
+    const url=`hh01/get/hh01/xfr/var?name=${tokenUrlName(item.tok)}&type=${item.type}`;
+    const raw=await getRequest(url);
+    const data=appendEvoChecksum(raw);
+    const filename=`${item.name}.${ext(item.type)}`;
+    const blob=URL.createObjectURL(new Blob([data],{type:"application/octet-stream"}));
+    const a=document.createElement("a");a.href=blob;a.download=filename;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(blob),2000);
+    status("Connected",`Downloaded ${filename} (${data.length} bytes).`,true);
+    log(`DOWNLOAD SUCCESS: ${filename}, ${data.length} bytes including Evo checksum.`);
+  }catch(e){log("DOWNLOAD ERROR: "+e.message);status("Transfer failed",e.message,true,"bad")}
+  finally{transactionRunning=false;$('cancel').disabled=true;}
+}
+async function deleteFile(item){
+  if(!confirm(`Delete ${item.name} from the calculator?`))return;
+  transactionRunning=true;$('cancel').disabled=false;
+  try{
+    status("Deleting",`Deleting ${item.name}…`,true);log(`DELETE ${item.name} type ${item.type}`);
+    await putRequest(`hh01/del/var?name=${tokenUrlName(item.tok)}&type=${item.type}`,new Uint8Array([0]),{chunkSize:2000});
+    log(`DELETE SUCCESS: ${item.name}`);transactionRunning=false;await refreshFiles();
+  }catch(e){log("DELETE ERROR: "+e.message);status("Delete failed",e.message,true,"bad")}
+  finally{transactionRunning=false;$('cancel').disabled=true;}
+}
+async function info(){
+  try{
+    const raw=await getRequest("hh01/get/hh01/sys/attributes");
+    const info={};let i=0;
+    if(raw.length){const count=raw[0]&31;i=1;for(let n=0;n<(count<31?count:256)&&i<raw.length;n++){const klen=raw[i++]&31;const key=text(raw.slice(i,i+klen));i+=klen;if(i>=raw.length)break;const vt=raw[i]>>5,vi=raw[i]&31;if(vt===3){i++;info[key]=text(raw.slice(i,i+vi));i+=vi}else if(vt===0){if(vi<24){info[key]=vi;i++}else if(vi===24){info[key]=raw[i+1];i+=2}else if(vi===25){info[key]=(raw[i+1]<<8)|raw[i+2];i+=3}else if(vi===26){info[key]=raw[i+1]*2**24+(raw[i+2]<<16)+(raw[i+3]<<8)+raw[i+4];i+=5}else break}else if(vt===1){info[key]=-(vi+1);i++}else break;}}
+    log("Calculator info:\n"+JSON.stringify(info,null,2));alert(JSON.stringify(info,null,2));
+  }catch(e){log("INFO ERROR: "+e.message);alert(e.message)}
+}
+async function putRequest(url,payload,opts={}){
+  const chunkSize=opts.chunkSize||2000;
+  await startSession();
+  const attrs=cat(fileAttr('"',"B8"),cat(fileAttr("1",String(payload.length)),fileAttr("@")));
+  $("txResult").textContent="Sending file attributes…";await kermitSend("F",ascii(url));await kermitSend("A",attrs);
+  const wire=encodeK(payload),chunks=splitElementAligned(wire,Math.min(chunkSize,session.dataChunkSize));
+  log(`PUT payload ${payload.length} bytes -> ${wire.length} encoded bytes in ${chunks.length} D packet(s).`);
+  for(let i=0;i<chunks.length;i++){if(cancelRequested)throw Error("Transaction cancelled");$("txResult").textContent=`Uploading… ${i+1}/${chunks.length}`;await kermitSend("D",chunks[i]);}
+  await kermitSend("Z");
+  try{await kermitSend("B")}catch(e){log(`PUT B completion response: ${e.message}`);throw e}
+  kermitReady=false;
+}
+async function sendFile(){
+  if(!selected||!device)throw Error("Choose a file first.");
+  transactionRunning=true;cancelRequested=false;$('cancel').disabled=false;
+  try{
+    const name0=selected.name.replace(/\.[^.]+$/,""),ext0=(selected.name.match(/\.[^.]+$/)||[""])[0].toLowerCase();
+    const bytes=new Uint8Array(await selected.arrayBuffer());let payload=bytes,url,kind;
+    if(ext0===".py"){
+      const name=name0.toUpperCase();if(!/^[A-Z][A-Z0-9Θ]{0,7}$/.test(name))throw Error("Python filename must be 1–8 letters/digits (or θ), starting with a letter.");
+      const source=dec.decode(bytes);payload=buildPythonPayload(name,source);url=`hh01/xfr/var?name=${urlEncodeName(name)}&type=15&memtarget=${$('memory').value}&policy=1`;kind=`Python ${name} (.8xpy2)`;
+    }else if(ext0===".8xp"){throw Error("Legacy CE .8xp files are not compatible with the Evo format.");}
+    else{
+      if(bytes.length<3)throw Error("File is too small to be an Evo variable.");
+      const type=evoFileType(bytes);if(type==null)throw Error("This does not look like a recognized Evo variable file.");
+      const archive=type===18||type===15||type===4||type===5?1:Number($('memory').value);url=`hh01/xfr/var?memtarget=${archive}&policy=1`;kind=`Evo type ${type}`;
+    }
+    status("Uploading",`Sending ${selected.name}…`,true);log(`PUT ${selected.name}: ${kind}, ${payload.length} payload bytes.`);
+    await putRequest(url,payload,{chunkSize:2000});
+    status("Connected",`Uploaded ${selected.name}.`,true);log(`UPLOAD SUCCESS: ${selected.name}`);transactionRunning=false;await refreshFiles();
+  }catch(e){log("SEND ERROR: "+e.message);status("Transfer failed",e.message,true,"bad")}
+  finally{transactionRunning=false;cancelRequested=false;$('cancel').disabled=true;}
+}
+
+$("connect").onclick=async()=>{
+  try{ await connect(); }
+  catch(e){
+    log("CONNECT ERROR: "+e.message);
+    status("Connection problem",e.message,false,"bad");
+    if(device){try{for(const n of [...claimed].reverse())await release(n)}catch{}}
+    $("disconnect").disabled=!device;
+    disableTransferUi();
+  }
+};
+$("disconnect").onclick=()=>disconnect();
+$("reset").onclick=()=>resetUsb();
+$("probe").onclick=async()=>{
+  try{await runFullProbe()}
+  catch(e){log("FULL PROBE ERROR: "+e.message)}
+};
+$("refresh").onclick=()=>refreshFiles().catch(e=>{});
+$("cancel").onclick=()=>cancelTransaction().catch(e=>log("Cancel error: "+e.message));
+$("info").onclick=()=>info();
+$("send").onclick=()=>sendFile();
+$("picker").onchange=e=>{
+  selected=e.target.files[0]||null;
+  $("picked").textContent=selected?`${selected.name} • ${selected.size} bytes`:"";
+  $("send").disabled=!selected||!transport;
+};
+if("usb" in navigator){
+  $("support").textContent="WebUSB available";
+  navigator.usb.addEventListener("disconnect",e=>{if(device&&e.device===device)disconnect()});
+}else $("support").textContent="WebUSB unavailable";
+</script>
+</body>
+</html>
